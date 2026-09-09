@@ -4,8 +4,32 @@ from rich.console import Console
 from rich.prompt import Prompt
 from .ai import ask_ai
 from .executor import run_command
+from .permissions import classify
+from .history import record
 
 console = Console()
+
+
+def approve(message):
+    return Prompt.ask(message, choices=["y", "n"], default="n") == "y"
+
+
+def execute_checked(request, command, model_risk):
+    risk = classify(command, model_risk)
+    console.print(f"[dim]مستوى الأمان: {risk}[/dim]")
+    if risk == "blocked":
+        console.print("[red]⛔ تم حظر هذا الأمر تلقائيًا لأنه قد يسبب ضررًا واسعًا للنظام أو البيانات.[/red]")
+        record("blocked", {"request": request, "command": command, "risk": risk})
+        return None
+    if risk == "medium" and not approve("⚠️ الأمر يحتاج موافقة. تنفيذه؟"):
+        console.print("تم الإلغاء.")
+        record("denied", {"request": request, "command": command, "risk": risk})
+        return None
+    code, stdout, stderr = run_command(command)
+    record("execute", {"request": request, "command": command, "risk": risk, "exit_code": code, "stdout": stdout, "stderr": stderr})
+    if stdout:
+        console.print(stdout)
+    return code, stdout, stderr
 
 
 def main():
@@ -28,15 +52,10 @@ def main():
                 console.print("[yellow]لم يتم إنشاء أمر للتنفيذ.[/yellow]")
                 continue
             console.print(f"\n[bold]الأمر:[/bold] {command}")
-            risk = plan.get("risk", "high")
-            if risk != "low":
-                answer = Prompt.ask("تنفيذ هذا الأمر؟", choices=["y", "n"], default="n")
-                if answer != "y":
-                    console.print("تم الإلغاء.")
-                    continue
-            code, stdout, stderr = run_command(command)
-            if stdout:
-                console.print(stdout)
+            result = execute_checked(request, command, plan.get("risk", "high"))
+            if result is None:
+                continue
+            code, stdout, stderr = result
             if code == 0:
                 console.print("[green]✓ تم التنفيذ بنجاح[/green]")
                 continue
@@ -44,16 +63,27 @@ def main():
             if stderr:
                 console.print(stderr)
             fix_context = json.dumps({"command": command, "exit_code": code, "stderr": stderr, "stdout": stdout}, ensure_ascii=False)
-            fix = ask_ai("حل المشكلة وأعطني أمر الإصلاح فقط ضمن JSON.", fix_context)
+            console.print("[cyan]🔍 تحليل الخطأ واقتراح إصلاح...[/cyan]")
+            fix = ask_ai("حل المشكلة. أعطني أمر إصلاح واحدًا فقط ضمن JSON، وتجنب الأوامر الخطرة.", fix_context)
             fix_command = fix.get("command", "").strip()
-            if fix_command:
-                console.print(f"[magenta]🔧 اقتراح الإصلاح:[/magenta] {fix_command}")
-                answer = Prompt.ask("تطبيق الإصلاح؟", choices=["y", "n"], default="n")
-                if answer == "y":
-                    c2, o2, e2 = run_command(fix_command)
-                    if o2: console.print(o2)
-                    if c2 == 0: console.print("[green]✓ تم الإصلاح بنجاح[/green]")
-                    elif e2: console.print(f"[red]{e2}[/red]")
+            if not fix_command:
+                console.print("[yellow]لم يتم العثور على إصلاح آمن تلقائيًا.[/yellow]")
+                continue
+            console.print(f"[magenta]🔧 اقتراح الإصلاح:[/magenta] {fix_command}")
+            repair_result = execute_checked("إصلاح: " + request, fix_command, fix.get("risk", "high"))
+            if repair_result is None:
+                continue
+            c2, o2, e2 = repair_result
+            if c2 == 0:
+                console.print("[green]✓ تم تنفيذ الإصلاح بنجاح.[/green]")
+                console.print("[cyan]🔄 إعادة المحاولة للتحقق...[/cyan]")
+                verify = execute_checked("التحقق بعد الإصلاح: " + request, command, plan.get("risk", "high"))
+                if verify and verify[0] == 0:
+                    console.print("[green]✓ نجح الأمر الأصلي بعد الإصلاح.[/green]")
+                elif verify:
+                    console.print("[yellow]⚠️ ما زال الأمر الأصلي يفشل؛ لم أكرر الإصلاح تلقائيًا.[/yellow]")
+            elif e2:
+                console.print(f"[red]فشل الإصلاح: {e2}[/red]")
         except Exception as exc:
             console.print(f"[red]خطأ: {exc}[/red]")
 
