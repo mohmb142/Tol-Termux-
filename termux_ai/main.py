@@ -7,38 +7,43 @@ from .executor import run_command
 from .permissions import classify
 from .history import record
 from .termux_tools import local_plan, missing_command_message
+from .arabic import display
 
 console = Console()
 
 
+def out(text="", **kwargs):
+    console.print(display(str(text)), **kwargs)
+
+
 def approve(message):
-    return Prompt.ask(message, choices=["y", "n"], default="n") == "y"
+    return Prompt.ask(display(message), choices=["y", "n"], default="n") == "y"
 
 
 def execute_checked(request, command, model_risk):
     risk = classify(command, model_risk)
-    console.print(f"[dim]مستوى الأمان: {risk}[/dim]")
+    out(f"مستوى الأمان: {risk}", style="dim")
     if risk == "blocked":
-        console.print("[red]⛔ تم حظر هذا الأمر تلقائيًا لأنه قد يسبب ضررًا واسعًا للنظام أو البيانات.[/red]")
+        out("⛔ تم حظر هذا الأمر تلقائيًا لأنه قد يسبب ضررًا واسعًا للنظام أو البيانات.", style="red")
         record("blocked", {"request": request, "command": command, "risk": risk})
         return None
     if risk == "medium" and not approve("⚠️ الأمر يحتاج موافقة. تنفيذه؟"):
-        console.print("تم الإلغاء.")
+        out("تم الإلغاء.")
         record("denied", {"request": request, "command": command, "risk": risk})
         return None
     code, stdout, stderr = run_command(command)
     record("execute", {"request": request, "command": command, "risk": risk, "exit_code": code, "stdout": stdout, "stderr": stderr})
     if stdout:
-        console.print(stdout)
+        out(stdout)
     return code, stdout, stderr
 
 
 def main():
-    console.print("[bold]🤖 Tol-Termux AI Agent[/bold]")
-    console.print("اكتب ما تريد تنفيذه. اكتب exit للخروج.\n")
+    out("🤖 Tol-Termux AI Agent", style="bold")
+    out("اكتب ما تريد تنفيذه. اكتب exit للخروج.\n")
     while True:
         try:
-            request = Prompt.ask("[cyan]أنت[/cyan]")
+            request = Prompt.ask(display("[cyan]أنت[/cyan]"))
         except (EOFError, KeyboardInterrupt):
             break
         if request.strip().lower() in {"exit", "quit", "خروج"}:
@@ -46,18 +51,17 @@ def main():
         if not request.strip():
             continue
         try:
-            # الطلبات الواضحة الخاصة بالهاتف تُنفّذ بقواعد محلية موثوقة قبل AI.
             plan = local_plan(request) or ask_ai(request)
             command = plan.get("command", "").strip()
-            console.print(f"[yellow]🧠 {plan.get('explanation', '')}[/yellow]")
+            out(f"🧠 {plan.get('explanation', '')}", style="yellow")
             if not command:
-                console.print("[yellow]لم يتم إنشاء أمر للتنفيذ.[/yellow]")
+                out("لم يتم إنشاء أمر للتنفيذ.", style="yellow")
                 continue
-            console.print(f"\n[bold]الأمر:[/bold] {command}")
+            out(f"الأمر: {command}", style="bold")
 
             missing_message = missing_command_message(command)
             if missing_message:
-                console.print(f"[yellow]📱 {missing_message}[/yellow]")
+                out(f"📱 {missing_message}", style="yellow")
                 if approve("تثبيت حزمة Termux:API الآن؟"):
                     install_result = execute_checked(
                         "تثبيت Termux:API لإصلاح الأمر: " + request,
@@ -65,7 +69,7 @@ def main():
                         "medium",
                     )
                     if install_result and install_result[0] == 0:
-                        console.print("[cyan]🔄 تمت محاولة التثبيت. أعد المحاولة الآن بعد التأكد من تطبيق Termux:API والأذونات.[/cyan]")
+                        out("🔄 تمت محاولة التثبيت. أعد المحاولة بعد التأكد من تطبيق Termux:API والأذونات.", style="cyan")
                 continue
 
             result = execute_checked(request, command, plan.get("risk", "high"))
@@ -73,42 +77,41 @@ def main():
                 continue
             code, stdout, stderr = result
             if code == 0:
-                console.print("[green]✓ تم التنفيذ بنجاح[/green]")
+                out("✓ تم التنفيذ بنجاح", style="green")
                 continue
-            console.print(f"[red]✗ فشل الأمر (code={code})[/red]")
+            out(f"✗ فشل الأمر (code={code})", style="red")
             if stderr:
-                console.print(stderr)
+                out(stderr, style="red")
 
-            # تشخيص محلي قبل استدعاء AI لمنع إصلاحات Termux API العشوائية.
             local_error = missing_command_message(command)
             if local_error:
-                console.print(f"[yellow]📱 {local_error}[/yellow]")
+                out(f"📱 {local_error}", style="yellow")
                 continue
 
             fix_context = json.dumps({"command": command, "exit_code": code, "stderr": stderr, "stdout": stdout}, ensure_ascii=False)
-            console.print("[cyan]🔍 تحليل الخطأ واقتراح إصلاح...[/cyan]")
-            fix = ask_ai("حل المشكلة. أعطني أمر إصلاح واحدًا فقط ضمن JSON، وتجنب الأوامر الخطرة.", fix_context)
+            out("🔍 تحليل الخطأ واقتراح إصلاح...", style="cyan")
+            fix = ask_ai("حل المشكلة. أعطني أمر إصلاح واحدًا فقط ضمن JSON، وتجنب الأوامر الخطرة. اشرح بالعربية.", fix_context)
             fix_command = fix.get("command", "").strip()
             if not fix_command:
-                console.print("[yellow]لم يتم العثور على إصلاح آمن تلقائيًا.[/yellow]")
+                out("لم يتم العثور على إصلاح آمن تلقائيًا.", style="yellow")
                 continue
-            console.print(f"[magenta]🔧 اقتراح الإصلاح:[/magenta] {fix_command}")
+            out(f"🔧 اقتراح الإصلاح: {fix_command}", style="magenta")
             repair_result = execute_checked("إصلاح: " + request, fix_command, fix.get("risk", "high"))
             if repair_result is None:
                 continue
             c2, o2, e2 = repair_result
             if c2 == 0:
-                console.print("[green]✓ تم تنفيذ الإصلاح بنجاح.[/green]")
-                console.print("[cyan]🔄 إعادة المحاولة للتحقق...[/cyan]")
+                out("✓ تم تنفيذ الإصلاح بنجاح.", style="green")
+                out("🔄 إعادة المحاولة للتحقق...", style="cyan")
                 verify = execute_checked("التحقق بعد الإصلاح: " + request, command, plan.get("risk", "high"))
                 if verify and verify[0] == 0:
-                    console.print("[green]✓ نجح الأمر الأصلي بعد الإصلاح.[/green]")
+                    out("✓ نجح الأمر الأصلي بعد الإصلاح.", style="green")
                 elif verify:
-                    console.print("[yellow]⚠️ ما زال الأمر الأصلي يفشل؛ لم أكرر الإصلاح تلقائيًا.[/yellow]")
+                    out("⚠️ ما زال الأمر الأصلي يفشل؛ لم أكرر الإصلاح تلقائيًا.", style="yellow")
             elif e2:
-                console.print(f"[red]فشل الإصلاح: {e2}[/red]")
+                out(f"فشل الإصلاح: {e2}", style="red")
         except Exception as exc:
-            console.print(f"[red]خطأ: {exc}[/red]")
+            out(f"خطأ: {exc}", style="red")
 
 
 if __name__ == "__main__":
