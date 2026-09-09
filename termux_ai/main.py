@@ -6,6 +6,7 @@ from .ai import ask_ai
 from .executor import run_command
 from .permissions import classify
 from .history import record
+from .termux_tools import local_plan, missing_command_message
 
 console = Console()
 
@@ -45,13 +46,28 @@ def main():
         if not request.strip():
             continue
         try:
-            plan = ask_ai(request)
+            # الطلبات الواضحة الخاصة بالهاتف تُنفّذ بقواعد محلية موثوقة قبل AI.
+            plan = local_plan(request) or ask_ai(request)
             command = plan.get("command", "").strip()
             console.print(f"[yellow]🧠 {plan.get('explanation', '')}[/yellow]")
             if not command:
                 console.print("[yellow]لم يتم إنشاء أمر للتنفيذ.[/yellow]")
                 continue
             console.print(f"\n[bold]الأمر:[/bold] {command}")
+
+            missing_message = missing_command_message(command)
+            if missing_message:
+                console.print(f"[yellow]📱 {missing_message}[/yellow]")
+                if approve("تثبيت حزمة Termux:API الآن؟"):
+                    install_result = execute_checked(
+                        "تثبيت Termux:API لإصلاح الأمر: " + request,
+                        "pkg install termux-api -y",
+                        "medium",
+                    )
+                    if install_result and install_result[0] == 0:
+                        console.print("[cyan]🔄 تمت محاولة التثبيت. أعد المحاولة الآن بعد التأكد من تطبيق Termux:API والأذونات.[/cyan]")
+                continue
+
             result = execute_checked(request, command, plan.get("risk", "high"))
             if result is None:
                 continue
@@ -62,6 +78,13 @@ def main():
             console.print(f"[red]✗ فشل الأمر (code={code})[/red]")
             if stderr:
                 console.print(stderr)
+
+            # تشخيص محلي قبل استدعاء AI لمنع إصلاحات Termux API العشوائية.
+            local_error = missing_command_message(command)
+            if local_error:
+                console.print(f"[yellow]📱 {local_error}[/yellow]")
+                continue
+
             fix_context = json.dumps({"command": command, "exit_code": code, "stderr": stderr, "stdout": stdout}, ensure_ascii=False)
             console.print("[cyan]🔍 تحليل الخطأ واقتراح إصلاح...[/cyan]")
             fix = ask_ai("حل المشكلة. أعطني أمر إصلاح واحدًا فقط ضمن JSON، وتجنب الأوامر الخطرة.", fix_context)
