@@ -1,6 +1,9 @@
-import json, os, time
+import json
+import os
+import time
 
 PATH = os.path.expanduser('~/.termux-ai/history.jsonl')
+
 
 def record(kind, data):
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
